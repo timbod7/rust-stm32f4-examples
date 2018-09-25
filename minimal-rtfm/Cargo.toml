@@ -20,25 +20,19 @@ categories = ["embedded", "no-std"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/timbod7/..."
 
-[dependencies]
-cortex-m-rtfm = "0.3.4"
-
-[dependencies.cast]
-version = "0.2.2"
-default-features = false
-
 [dependencies.stm32f4]
 version = "0.2.3"
 features = ["stm32f407", "rt"]
 
 [dependencies.cortex-m]
-version = "0.5.6"
+version = "0.5.7"
 
 [dependencies.cortex-m-rt]
-version = "0.5.1"
+version = "0.5.7"
 
-[dependencies.cortex-m-semihosting]
-version = "0.3.1"
+[dependencies.cortex-m-rtfm]
+git = "https://github.com/ykomatsu/cortex-m-rtfm"
+branch = "update"
 
-[dependencies.panic-semihosting]
+[dependencies.panic-abort]
 version = "0.3.0"

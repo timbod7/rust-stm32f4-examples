@@ -4,9 +4,11 @@
 #![no_main]
 #![no_std]
 
+#[macro_use]
+extern crate cortex_m_rt as rt;
 extern crate cortex_m_rtfm as rtfm; // IMPORTANT always do this rename
 extern crate stm32f4;
-extern crate panic_semihosting;
+extern crate panic_abort;
 
 // import the procedural macro
 use rtfm::app;
