@@ -1,81 +1,86 @@
-//! An application with one task
+// An RTFM application with a single task that is scheduled repeatedly to toggle an LED
 #![deny(unsafe_code)]
 #![deny(warnings)]
 #![no_std]
 #![no_main]
 
+extern crate rtfm;
 extern crate cortex_m;
-#[macro_use(entry)]
 extern crate cortex_m_rt as rt;
-extern crate cortex_m_rtfm as rtfm;
 extern crate panic_abort;
 extern crate stm32f4;
 
-use rtfm::{app, Threshold};
-use stm32f4::stm32f407;
-use stm32f4::stm32f407::GPIOD;
-
-app! {
-    device: stm32f407,
-
-    // Here data resources are declared
-    //
-    // Data resources are static variables that are safe to share across tasks
-    resources: {
-        // Declaration of resources looks exactly like declaration of static
-        // variables
-        static ON: bool = false;
+extern crate stm32f407g_disc as board; // <-- board support crate (BSP). Depending on your board, you might have to choose another one
+use board::{
+    gpio::{
+        Output, PushPull,
+        gpiod::PD12,
     },
+    hal::prelude::*,
+};
 
-    // Here tasks are declared
-    //
-    // Each task corresponds to an interrupt or an exception. Every time the
-    // interrupt or exception becomes *pending* the corresponding task handler
-    // will be executed.
-    tasks: {
-        // Here we declare that we'll use the SysTick exception as a task
-        SysTick: {
-            // Path to the task handler
-            path: sys_tick,
+use rtfm::cyccnt::{Instant, U32Ext};
 
-            // These are the resources this task has access to.
-            //
-            // The resources listed here must also appear in `app.resources`
-            resources: [ON],
-        },
+const CORE_CLOCK_FREQUENCY: u32 = 168000000;
+
+#[rtfm::app(device = board, monotonic = rtfm::cyccnt::CYCCNT, peripherals = true)]
+const APP: () = {
+    // static resources
+    struct Resources {
+
+        // pre-initialized variable
+        #[init(false)] // <-- initial value
+        on: bool,
+
+        #[init(1)]
+        toggle_interval_seconds: u32,
+
+        // "late resource", initialized at runtime during init()
+        // and returned in init::LateResources struct
+        led_pin: PD12<Output<PushPull>>,
     }
-}
 
-fn init(p: init::Peripherals, _r: init::Resources) {
+    #[init(schedule = [toggle])]
+    fn init(mut ctx: init::Context) -> init::LateResources {
+        ctx.core.DWT.enable_cycle_counter();
+        ctx.core.DCB.enable_trace(); // needed so the DWT cycle counter doesn't get disabled when no debugger is connected
 
-    // Power up the relevant peripherals
-    p.device.RCC.ahb1enr.write(|w| w.gpioden().set_bit());
-    p.device.RCC.apb1enr.write(| w| w.tim6en().set_bit());
+        let rcc = ctx.device.RCC.constrain();
+        rcc.cfgr.sysclk(CORE_CLOCK_FREQUENCY.hz()).freeze();
 
-    // Configure the pin PD12 as a pullup output pin
-    p.device.GPIOD.otyper.write(|w| w.ot12().clear_bit());
-    p.device.GPIOD.moder.write(|w| w.moder12().output());
-    p.device.GPIOD.pupdr.write(|w| w.pupdr12().pull_up());
-}
+        // Configure the pin PD12 as a push-pull output pin
+        let gpiod = ctx.device.GPIOD.split();
+        let led_pin = gpiod.pd12.into_push_pull_output();
 
-fn idle() -> ! {
-    loop {
-        rtfm::wfi();
+        // schedule the LED toggle task for immediate execution
+        ctx.schedule.toggle(Instant::now()).unwrap();
+
+        // late resources
+        init::LateResources {
+            led_pin: led_pin
+        }
     }
-}
 
-// This is the task handler of the SysTick exception
-//
-// `_t` is the preemption threshold token. We won't use it in this program.
-//
-// `r` is the set of resources this task has access to. `SysTick::Resources`
-// has one field per resource declared in `app!`.
-#[allow(unsafe_code)]
-fn sys_tick(_t: &mut Threshold, mut r: SysTick::Resources) {
-    // toggle state
-    *r.ON = !*r.ON;
+    // this task requires access to led_pin to toggle the LED and
+    // re-schedules itself toggle_interval_seconds later
+    #[task(resources = [led_pin, toggle_interval_seconds], schedule = [toggle])]
+    fn toggle(ctx: toggle::Context) {
+        // toggle state
+        ctx.resources.led_pin.toggle().unwrap();
 
-    unsafe {
-      (*GPIOD::ptr()).odr.write(|w| w.odr12().bit(*r.ON));
+        // re-schedule toggle()
+        let execution_time = (CORE_CLOCK_FREQUENCY * (*ctx.resources.toggle_interval_seconds)).cycles();
+        ctx.schedule.toggle(ctx.scheduled + execution_time).unwrap()
     }
-}
+
+    #[idle]
+    fn idle(_ctx: idle::Context) -> ! {
+        loop {}
+    }
+
+    // tasks override interrupt handlers. You'll need to list as
+    // many interrupt handlers here as your application has tasks.
+    extern "C" {
+        fn USART1();
+    }
+};
